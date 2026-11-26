@@ -377,6 +377,25 @@ button {
   margin-top: 16px;
 }
 
+/* khung nhắc khi trình duyệt không phát được giọng đọc */
+.notice {
+  display: flex;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  background: var(--coral-l);
+  border: 2px solid var(--coral);
+  border-radius: 20px;
+  font-size: 0.95rem;
+}
+
+.notice-icon { font-size: 1.6rem; line-height: 1.2; }
+.notice b { font-family: var(--display); font-size: 1.08rem; }
+.notice p { margin: 2px 0 0; font-weight: 700; }
+.notice .btn,
+.settings .warn + .btn { margin-top: 10px; }
+.settings .hint { display: block; margin-bottom: 8px; }
+
 .all-done {
   padding: 14px 18px;
   background: var(--sun-l);

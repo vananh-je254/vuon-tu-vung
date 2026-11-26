@@ -213,13 +213,21 @@
 
   function refreshVoices() {
     if (!synth) return;
+    const before = voices.length;
     voices = synth.getVoices().filter((v) => /^en([-_]|$)/i.test(v.lang || ''));
-    listeners.forEach((fn) => fn());
+    if (voices.length !== before) listeners.forEach((fn) => fn());
   }
   if (synth) {
     refreshVoices();
     if (typeof synth.addEventListener === 'function') synth.addEventListener('voiceschanged', refreshVoices);
     else synth.onvoiceschanged = refreshVoices;
+    // Một số trình duyệt (nhất là trên Android) nạp giọng chậm mà không bao giờ báo "voiceschanged":
+    // tự hỏi lại vài lần trong ~10 giây đầu.
+    let tries = 0;
+    const poll = setInterval(() => {
+      refreshVoices();
+      if (voices.length || ++tries >= 20) clearInterval(poll);
+    }, 500);
   }
 
   /** Xếp loại một giọng: 'good' (tự nhiên), 'ok' (tạm được), 'robot' (giọng máy đời cũ / giọng đùa). */
@@ -249,6 +257,9 @@
     supported: !!synth && typeof window.SpeechSynthesisUtterance === 'function',
     preferred: { us: '', uk: '' },
     rate: 0.9,
+    works: false, // đã có lần đọc thành tiếng trên trình duyệt này
+    failed: false, // lần thử gần nhất không phát ra được tiếng
+    refresh: refreshVoices,
     onVoices(fn) {
       listeners.push(fn);
     },
@@ -296,16 +307,42 @@
         u.rate = slow ? 0.55 : this.rate;
         u.pitch = 1;
         let done = false;
+        let started = false;
         const finish = (ok) => {
           if (done) return;
           done = true;
           clearTimeout(guard);
+          clearTimeout(watchdog);
           if (token === speakToken) Sound.duck(false);
           resolve(ok && token === speakToken);
         };
-        const guard = setTimeout(() => finish(true), 9000);
-        u.onend = () => finish(true);
-        u.onerror = () => finish(false);
+        const markStarted = () => {
+          started = true;
+          this.works = true;
+          this.failed = false;
+        };
+        const guard = setTimeout(() => finish(started), 15000);
+        // Không thấy bắt đầu đọc sau 8 giây (và không bị lệnh đọc khác chen vào) → coi như trình duyệt không đọc được.
+        // KHÔNG huỷ lệnh đọc: lần đọc đầu tiên trên điện thoại có thể rất chậm (công cụ giọng nói của máy
+        // phải khởi động hoặc tải dữ liệu), huỷ sớm sẽ khiến máy không bao giờ kịp đọc. Nếu sau đó máy
+        // đọc được thì sự kiện bắt đầu/kết thúc sẽ tự xoá cờ lỗi.
+        const watchdog = setTimeout(() => {
+          if (started || done || token !== speakToken) return;
+          if (synth.speaking || synth.pending) return; // máy vẫn đang xử lý: chờ tiếp, không kết luận gì
+          this.failed = true;
+          finish(false);
+        }, 8000);
+        u.onstart = markStarted;
+        u.onend = () => {
+          if (!started) markStarted(); // có trình duyệt chỉ báo lúc đọc xong
+          finish(true);
+        };
+        u.onerror = (e) => {
+          // Bị ngắt bởi lệnh đọc khác, hoặc bị chặn vì chưa có thao tác chạm: không phải lỗi của thiết bị.
+          const benign = ['interrupted', 'canceled', 'not-allowed'].includes(e && e.error);
+          if (!benign && token === speakToken) this.failed = true;
+          finish(false);
+        };
         Sound.duck(true);
         // Chrome đôi khi bỏ qua speak() gọi ngay sau cancel()
         setTimeout(() => {

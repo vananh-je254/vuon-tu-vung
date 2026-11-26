@@ -149,18 +149,70 @@
 
   const accentFor = (w) => (S.settings.accent === 'auto' ? w.lesson.accent : S.settings.accent);
   const sayText = (w) => w.say || w.w.replace(/\s*\([^)]*\)/g, '');
-  let warnedNoVoice = false;
-  function say(w, slow = false) {
-    if (!Speech.supported || !Speech.hasVoices()) {
-      if (!warnedNoVoice) {
-        warnedNoVoice = true;
-        toast('Thiết bị này chưa có giọng đọc tiếng Anh 😢 Hãy thử Chrome, Edge hoặc Safari nhé.');
-      }
-      return Promise.resolve(false);
+
+  // Nơi trang đang được mở: trình duyệt nhúng trong Facebook / Zalo… thường không có giọng đọc.
+  const UA = navigator.userAgent || '';
+  const IN_APP = /FBAN|FBAV|FB_IAB|FBIOS|Instagram|Zalo|Line\/|MicroMessenger|;\s*wv\)/i.test(UA);
+  const IS_ANDROID = /Android/i.test(UA);
+
+  /** Vì sao không nghe được và cách khắc phục, tuỳ theo nơi trang đang được mở. */
+  function speechHelp() {
+    if (IN_APP) {
+      return {
+        title: 'Trình duyệt trong ứng dụng không có giọng đọc',
+        text: 'Bạn đang mở trang bên trong Facebook, Zalo hoặc một ứng dụng khác. Hãy bấm nút ⋮ hoặc ⋯ ở góc màn hình rồi chọn “Mở bằng trình duyệt” (Chrome hoặc Safari) để nghe được phát âm.',
+      };
     }
-    return Speech.speak(sayText(w), { accent: accentFor(w), slow });
+    if (IS_ANDROID && Speech.supported) {
+      return {
+        title: 'Điện thoại chưa bật giọng đọc tiếng Anh',
+        text: 'Vào Cài đặt của điện thoại, tìm “Chuyển văn bản thành giọng nói” (máy Xiaomi: Cài đặt bổ sung → Ngôn ngữ và nhập liệu), chọn công cụ “Dịch vụ giọng nói của Google” (Speech Services by Google; nếu chưa có thì cài từ CH Play) và tải dữ liệu tiếng Anh. Sau đó đóng hẳn Chrome rồi mở lại trang.',
+      };
+    }
+    return {
+      title: 'Trình duyệt này không phát được giọng đọc',
+      text: 'Hãy mở trang bằng Chrome, Edge hoặc Safari bản mới để nghe được phát âm.',
+    };
   }
-  const canListen = () => Speech.supported && Speech.hasVoices();
+  /** Nút mở thẳng bằng Chrome (chỉ dùng được trên Android, khi đang ở trong trình duyệt nhúng). */
+  function openInChromeBtn() {
+    if (!(IN_APP && IS_ANDROID) || !/^https?:$/.test(location.protocol)) return '';
+    const href = `intent://${location.host}${location.pathname}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(
+      location.origin + location.pathname
+    )};end`;
+    return `<a class="btn sky small" href="${esc(href)}">🌐 Mở bằng Chrome</a>`;
+  }
+  function showSpeechHelp() {
+    const h = speechHelp();
+    openModal(`<div class="confirm">
+      ${mascot('sad', 'mascot-sm')}
+      <h2>${esc(h.title)}</h2>
+      <p>${esc(h.text)}</p>
+      <div class="row-btns">${openInChromeBtn()}<button class="btn mint" data-act="modal-close">Đã hiểu</button></div>
+    </div>`);
+  }
+
+  /** Khung nhắc ở trang chủ khi biết chắc (hoặc gần như chắc) trang không đọc được thành tiếng. */
+  function speechNotice() {
+    const broken = !Speech.supported || Speech.failed || (IN_APP && !Speech.hasVoices() && !Speech.works);
+    if (!broken) return '';
+    const h = speechHelp();
+    return `<div class="notice" role="note"><span class="notice-icon" aria-hidden="true">🔇</span>
+      <div><b>${esc(h.title)}</b><p>${esc(h.text)}</p>${openInChromeBtn()}</div></div>`;
+  }
+
+  let speechWarned = false;
+  /** Đọc một từ. Chỉ khi thử mà không ra tiếng mới báo cho người dùng (một lần mỗi lượt mở trang). */
+  async function say(w, slow = false) {
+    const ok = Speech.supported ? await Speech.speak(sayText(w), { accent: accentFor(w), slow }) : false;
+    if (!ok && (!Speech.supported || Speech.failed) && !speechWarned && !tour) {
+      speechWarned = true;
+      showSpeechHelp();
+    }
+    return ok;
+  }
+  // Câu hỏi nghe chỉ dùng khi chắc chắn máy đọc được: có giọng trong danh sách, hoặc đã từng đọc thành tiếng.
+  const canListen = () => Speech.supported && !Speech.failed && (Speech.hasVoices() || Speech.works);
 
   /* ------------------------------------------------------------------ */
   /* Nhân vật: bé Mầm (chậu cây)                                         */
@@ -353,6 +405,7 @@
             <div class="hero-cta">${reviewBtn}${learnBtn}${tourBtn}</div>
           </div>
         </section>
+        ${speechNotice()}
 
         <section class="garden" aria-label="Khu vườn của bạn">
           <h2>Khu vườn của bạn <small>${learned}/${ALL.length} từ đã gieo</small></h2>
@@ -845,8 +898,18 @@
 
   /** Cảnh báo khi trình duyệt chỉ có giọng máy đời cũ cho tiếng Anh. */
   function voiceWarning() {
-    if (!Speech.supported) return '<p class="warn">Trình duyệt này không hỗ trợ giọng đọc. Hãy dùng Edge, Chrome hoặc Safari.</p>';
-    if (!Speech.hasVoices()) return '';
+    if (!Speech.supported || Speech.failed) {
+      const h = speechHelp();
+      return `<p class="warn"><b>${esc(h.title)}.</b> ${esc(h.text)}</p>${openInChromeBtn()}`;
+    }
+    if (!Speech.hasVoices()) {
+      // Danh sách rỗng chưa chắc là không đọc được: nhiều điện thoại vẫn đọc bằng giọng mặc định của máy.
+      return Speech.works
+        ? '<p class="hint">Trình duyệt không liệt kê giọng nào, nên ứng dụng dùng giọng mặc định của máy.</p>'
+        : `<p class="warn">Trình duyệt chưa liệt kê giọng tiếng Anh nào. Bấm <b>Nghe thử</b> để kiểm tra: nếu vẫn nghe được thì không sao. Nếu không nghe được: ${esc(
+            speechHelp().text
+          )}</p>${openInChromeBtn()}`;
+    }
     const robotOnly = ['us', 'uk'].filter((a) => Speech.quality(Speech.auto(a)) === 'robot');
     if (!robotOnly.length) return '';
     return `<p class="warn">Trình duyệt này chỉ có giọng máy đời cũ cho ${
@@ -1358,10 +1421,15 @@
     'tour-next': () => tour && showTourStep(tour.i + 1),
     'tour-prev': () => tour && showTourStep(tour.i - 1),
     'tour-end': endTour,
-    'test-voice': (el) => {
-      const accent = el.dataset.accent;
-      if (!Speech.hasVoices()) return toast('Thiết bị chưa có giọng đọc tiếng Anh.');
-      Speech.speak('Hello! Let’s grow your vocabulary garden today.', { accent });
+    'test-voice': async (el) => {
+      // Luôn thử đọc thật, kể cả khi trình duyệt không liệt kê giọng nào; chỉ báo lỗi khi thử mà không ra tiếng.
+      Speech.refresh();
+      const worked = Speech.works;
+      const ok = Speech.supported
+        ? await Speech.speak('Hello! Let’s grow your vocabulary garden today.', { accent: el.dataset.accent })
+        : false;
+      if (!ok && (!Speech.supported || Speech.failed)) return showSpeechHelp();
+      if (Speech.works !== worked && $('.settings')) openSettings(); // cập nhật dòng ghi chú về giọng đọc
     },
     reset: () =>
       confirmBox({
